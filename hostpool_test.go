@@ -41,6 +41,14 @@ func TestHostPool(t *testing.T) {
 	assert.Equal(t, p.Get().Host(), "a")
 	assert.Equal(t, p.Get().Host(), "c")
 
+	resps := p.GetHealthy()
+	assert.Equal(t, len(resps), 2) // Only 2 are returned as b has failed
+
+	// Ensure all nodes are healthy after being reset
+	p.ResetAll()
+	resps = p.GetHealthy()
+	assert.Equal(t, len(resps), 3)
+
 	// ensure that we get *something* back when all hosts fail
 	for _, host := range []string{"a", "b", "c"} {
 		response := &standardHostPoolResponse{host: host, pool: p}
@@ -48,6 +56,13 @@ func TestHostPool(t *testing.T) {
 	}
 	resp := p.Get()
 	assert.NotEqual(t, resp, nil)
+
+	for _, host := range []string{"a", "b", "c"} {
+		response := &standardHostPoolResponse{host: host, pool: p}
+		response.Mark(dummyErr)
+	}
+	resps = p.GetHealthy()
+	assert.Equal(t, len(resps), 3) // All nodes have been reset
 }
 
 type mockTimer struct {
@@ -59,7 +74,7 @@ func (t *mockTimer) between(start time.Time, end time.Time) time.Duration {
 }
 
 func TestEpsilonGreedy(t *testing.T) {
-	log.SetOutput(ioutil.Discard)
+	// log.SetOutput(ioutil.Discard)
 	defer log.SetOutput(os.Stdout)
 
 	rand.Seed(10)
@@ -95,6 +110,11 @@ func TestEpsilonGreedy(t *testing.T) {
 
 	assert.Equal(t, hitCounts["a"] > hitCounts["b"], true)
 
+	hostsR := p.GetHealthy()
+	assert.Equal(t, len(hostsR), 2)
+	assert.Equal(t, "a", hostsR[0].Host())
+	assert.Equal(t, "b", hostsR[1].Host())
+
 	hitCounts["a"] = 0
 	hitCounts["b"] = 0
 	log.Printf("starting second run (b, a)")
@@ -118,6 +138,11 @@ func TestEpsilonGreedy(t *testing.T) {
 	}
 
 	assert.Equal(t, hitCounts["b"] > hitCounts["a"], true)
+
+	hostsR = p.GetHealthy()
+	assert.Equal(t, len(hostsR), 2)
+	assert.Equal(t, "b", hostsR[0].Host())
+	assert.Equal(t, "a", hostsR[1].Host())
 }
 
 func BenchmarkEpsilonGreedy(b *testing.B) {

@@ -3,6 +3,7 @@ package hostpool
 import (
 	"log"
 	"math/rand"
+	"sort"
 	"time"
 )
 
@@ -111,6 +112,21 @@ func (p *epsilonGreedyHostPool) Get() HostPoolResponse {
 	}
 }
 
+func (p *epsilonGreedyHostPool) GetHealthy() []HostPoolResponse {
+	p.Lock()
+	defer p.Unlock()
+	hosts := p.getEpsilonGreedyHealthy()
+	hostsR := make([]HostPoolResponse, len(hosts))
+	started := time.Now()
+	for i, host := range hosts {
+		hostsR[i] = &epsilonHostPoolResponse{
+			standardHostPoolResponse: standardHostPoolResponse{host: host, pool: p},
+			started:                  started,
+		}
+	}
+	return hostsR
+}
+
 func (p *epsilonGreedyHostPool) getEpsilonGreedy() string {
 	var hostToUse *hostEntry
 
@@ -170,6 +186,57 @@ func (p *epsilonGreedyHostPool) getEpsilonGreedy() string {
 	return hostToUse.host
 }
 
+func (p *epsilonGreedyHostPool) getEpsilonGreedyHealthy() []string {
+	var hostsToUse []*hostEntry
+
+	// this is our exploration phase
+	if rand.Float32() < p.epsilon {
+		p.epsilon = p.epsilon * epsilonDecay
+		if p.epsilon < minEpsilon {
+			p.epsilon = minEpsilon
+		}
+		return p.getHealthy()
+	}
+
+	// calculate values for each host in the 0..1 range (but not normalized)
+	now := time.Now()
+	var sumValues float64
+	for _, h := range p.hostList {
+		if h.canTryHost(now) {
+			v := h.getWeightedAverageResponseTime()
+			if v > 0 {
+				ev := p.CalcValueFromAvgResponseTime(v)
+				h.epsilonValue = ev
+				sumValues += ev
+				hostsToUse = append(hostsToUse, h)
+			}
+		}
+	}
+
+	if len(hostsToUse) != 0 {
+		// now normalize to the 0..1 range to get a percentage
+		for _, h := range hostsToUse {
+			h.epsilonPercentage = h.epsilonValue / sumValues
+		}
+
+		// order hosts by epsilonPercentage
+		sort.Sort(sort.Reverse(byEpsilonPercentage(hostsToUse)))
+	}
+
+	if len(hostsToUse) == 0 {
+		return p.getHealthy()
+	}
+
+	hosts := make([]string, len(hostsToUse))
+	for i, hostToUse := range hostsToUse {
+		if hostToUse.dead {
+			hostToUse.willRetryHost(p.maxRetryInterval)
+		}
+		hosts[i] = hostToUse.host
+	}
+	return hosts
+}
+
 func (p *epsilonGreedyHostPool) markSuccess(hostR HostPoolResponse) {
 	// first do the base markSuccess - a little redundant with host lookup but cleaner than repeating logic
 	p.standardHostPool.markSuccess(hostR)
@@ -185,7 +252,7 @@ func (p *epsilonGreedyHostPool) markSuccess(hostR HostPoolResponse) {
 	defer p.Unlock()
 	h, ok := p.hosts[host]
 	if !ok {
-		log.Fatalf("host %s not in HostPool %v", host, p.Hosts())
+		log.Fatalf("host %s not in HostPool %v", host, p.getHosts())
 	}
 	h.epsilonCounts[h.epsilonIndex]++
 	h.epsilonValues[h.epsilonIndex] += int64(duration.Seconds() * 1000)
@@ -201,4 +268,13 @@ type realTimer struct{}
 
 func (rt *realTimer) between(start time.Time, end time.Time) time.Duration {
 	return end.Sub(start)
+}
+
+// Sort methods
+type byEpsilonPercentage []*hostEntry
+
+func (h byEpsilonPercentage) Len() int      { return len(h) }
+func (h byEpsilonPercentage) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+func (h byEpsilonPercentage) Less(i, j int) bool {
+	return h[i].epsilonPercentage < h[j].epsilonPercentage
 }
