@@ -39,6 +39,7 @@ type standardHostPoolResponse struct {
 // get the list of all Hosts, and use ResetAll to reset state.
 type HostPool interface {
 	Get() HostPoolResponse
+	GetHealthy() []HostPoolResponse
 	// keep the marks separate so we can override independently
 	markSuccess(HostPoolResponse)
 	markFailed(HostPoolResponse)
@@ -116,6 +117,19 @@ func (p *standardHostPool) Get() HostPoolResponse {
 	return &standardHostPoolResponse{host: host, pool: p}
 }
 
+// GetHealthy returns a list of healthy hosts
+func (p *standardHostPool) GetHealthy() []HostPoolResponse {
+	p.Lock()
+	defer p.Unlock()
+
+	hosts := p.getHealthy()
+	hostsR := make([]HostPoolResponse, len(hosts))
+	for i, host := range hosts {
+		hostsR[i] = &standardHostPoolResponse{host: host, pool: p}
+	}
+	return hostsR
+}
+
 func (p *standardHostPool) getRoundRobin() string {
 	now := time.Now()
 	hostCount := len(p.hostList)
@@ -139,6 +153,32 @@ func (p *standardHostPool) getRoundRobin() string {
 	p.doResetAll()
 	p.nextHostIndex = 0
 	return p.hostList[0].host
+}
+
+func (p *standardHostPool) getHealthy() []string {
+	now := time.Now()
+	hostCount := len(p.hostList)
+	hosts := make([]string, 0, hostCount)
+	for _, h := range p.hostList {
+		if !h.dead {
+			hosts = append(hosts, h.host)
+			continue
+		}
+		if h.nextRetry.Before(now) {
+			h.willRetryHost(p.maxRetryInterval)
+			hosts = append(hosts, h.host)
+			continue
+		}
+	}
+
+	// if all hosts are down. re-add them
+	if len(hosts) == 0 {
+		p.doResetAll()
+		p.nextHostIndex = 0
+		hosts = p.Hosts()
+	}
+
+	return hosts
 }
 
 func (p *standardHostPool) ResetAll() {
@@ -204,6 +244,7 @@ func (p *standardHostPool) markFailed(hostR HostPoolResponse) {
 	}
 
 }
+
 func (p *standardHostPool) Hosts() []string {
 	hosts := make([]string, len(p.hosts))
 	for host := range p.hosts {

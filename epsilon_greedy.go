@@ -111,6 +111,21 @@ func (p *epsilonGreedyHostPool) Get() HostPoolResponse {
 	}
 }
 
+func (p *epsilonGreedyHostPool) GetHealthy() []HostPoolResponse {
+	p.Lock()
+	defer p.Unlock()
+	hosts := p.getEpsilonGreedyHealthy()
+	hostsR := make([]HostPoolResponse, len(hosts))
+	started := time.Now()
+	for i, host := range hosts {
+		hostsR[i] = &epsilonHostPoolResponse{
+			standardHostPoolResponse: standardHostPoolResponse{host: host, pool: p},
+			started:                  started,
+		}
+	}
+	return hostsR
+}
+
 func (p *epsilonGreedyHostPool) getEpsilonGreedy() string {
 	var hostToUse *hostEntry
 
@@ -168,6 +183,66 @@ func (p *epsilonGreedyHostPool) getEpsilonGreedy() string {
 		hostToUse.willRetryHost(p.maxRetryInterval)
 	}
 	return hostToUse.host
+}
+
+func (p *epsilonGreedyHostPool) getEpsilonGreedyHealthy() []string {
+	var hostsToUse []*hostEntry
+
+	// this is our exploration phase
+	if rand.Float32() < p.epsilon {
+		p.epsilon = p.epsilon * epsilonDecay
+		if p.epsilon < minEpsilon {
+			p.epsilon = minEpsilon
+		}
+		return p.getHealthy()
+	}
+
+	// calculate values for each host in the 0..1 range (but not normalized)
+	var possibleHosts []*hostEntry
+	now := time.Now()
+	var sumValues float64
+	for _, h := range p.hostList {
+		if h.canTryHost(now) {
+			v := h.getWeightedAverageResponseTime()
+			if v > 0 {
+				ev := p.CalcValueFromAvgResponseTime(v)
+				h.epsilonValue = ev
+				sumValues += ev
+				possibleHosts = append(possibleHosts, h)
+			}
+		}
+	}
+
+	if len(possibleHosts) != 0 {
+		// now normalize to the 0..1 range to get a percentage
+		for _, h := range possibleHosts {
+			h.epsilonPercentage = h.epsilonValue / sumValues
+		}
+
+		// do a weighted random choice among hosts
+		ceiling := 0.0
+		pickPercentage := rand.Float64()
+		for _, h := range possibleHosts {
+			ceiling += h.epsilonPercentage
+			if pickPercentage <= ceiling {
+				hostsToUse = append(hostsToUse, h)
+				break
+			}
+		}
+	}
+
+	if len(hostsToUse) == 0 {
+		return p.getHealthy()
+	}
+
+	hosts := make([]string, len(hostsToUse))
+	for i, hostToUse := range hostsToUse {
+		if hostToUse.dead {
+			hostToUse.willRetryHost(p.maxRetryInterval)
+		}
+		hosts[i] = hostToUse.host
+	}
+	return hosts
 }
 
 func (p *epsilonGreedyHostPool) markSuccess(hostR HostPoolResponse) {
