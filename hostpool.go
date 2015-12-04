@@ -4,7 +4,7 @@
 package hostpool
 
 import (
-	"log"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -183,7 +183,7 @@ func (p *standardHostPool) markSuccess(hostR HostPoolResponse) {
 
 	h, ok := p.hosts[host]
 	if !ok {
-		log.Fatalf("host %s not in HostPool %v", host, p.Hosts())
+		panic(fmt.Sprintf("host %s not in HostPool %v", host, p.Hosts()))
 	}
 	h.dead = false
 }
@@ -194,7 +194,7 @@ func (p *standardHostPool) markFailed(hostR HostPoolResponse) {
 	defer p.Unlock()
 	h, ok := p.hosts[host]
 	if !ok {
-		log.Fatalf("host %s not in HostPool %v", host, p.Hosts())
+		panic(fmt.Sprintf("host %s not in HostPool %v", host, p.Hosts()))
 	}
 	if !h.dead {
 		h.dead = true
