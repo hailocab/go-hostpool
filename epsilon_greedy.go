@@ -1,6 +1,7 @@
 package hostpool
 
 import (
+	"fmt"
 	"log"
 	"math/rand"
 	"time"
@@ -201,7 +202,7 @@ func (p *epsilonGreedyHostPool) markSuccess(hostR HostPoolResponse) {
 	defer p.Unlock()
 	h, ok := p.hosts[host]
 	if !ok {
-		log.Fatalf("host %s not in HostPool %v", host, p.Hosts())
+		panic(fmt.Sprintf("host %s not in HostPool %v", host, p.Hosts()))
 	}
 	h.epsilonCounts[h.epsilonIndex]++
 	h.epsilonValues[h.epsilonIndex] += int64(duration.Seconds() * 1000)
