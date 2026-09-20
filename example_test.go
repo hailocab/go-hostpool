@@ -8,6 +8,8 @@ func ExampleNewEpsilonGreedy() {
 	hp := hostpool.NewEpsilonGreedy([]string{"a", "b"}, 0, &hostpool.LinearEpsilonValueCalculator{})
 	hostResponse := hp.Get()
 	hostname := hostResponse.Host()
-	err := nil // (make a request with hostname)
+	// Make a request with hostname and assign its error to err.
+	_ = hostname
+	var err error
 	hostResponse.Mark(err)
 }
